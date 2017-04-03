@@ -22,8 +22,8 @@
 #include "utils/ustdlib.h"
 #include "usb_bulk_structs.h"
 
-volatile uint8_t g_ui8ParallelOutLow[3] =  {0b1001, 0b1111, 0b0101};
-volatile uint8_t g_ui8ParallelOutHigh[3] = {0b0110, 0b0110, 0b0010};
+volatile uint8_t g_ui8ParallelOutLow = 0b0; // =  {0b1001, 0b1111, 0b0101};
+volatile uint8_t g_ui8ParallelOutHigh = 0b0; // = {0b0110, 0b0110, 0b0010};
 volatile uint8_t g_i=0;
 volatile bool g_bIntDone = 0;
 //volatile bool g_bHighLowSwitch = 0;
@@ -51,10 +51,12 @@ uint32_t g_ui32UARTRxErrors = 0;
 #define OUTPUTL_PORT SYSCTL_PERIPH_GPIOC
 #define OUTPUTL_BASE GPIO_PORTC_BASE
 #define OUTPUTL_PINS (GPIO_PIN_7 | GPIO_PIN_6 | GPIO_PIN_5 | GPIO_PIN_4)
+//#define OUTPUTL_PINS (GPIO_PIN_3 | GPIO_PIN_2 | GPIO_PIN_1 | GPIO_PIN_0)
+
 
 #define OUTPUTH_PORT SYSCTL_PERIPH_GPIOE
 #define OUTPUTH_BASE GPIO_PORTE_BASE
-#define OUTPUTH_PINS ( GPIO_PIN_5 | GPIO_PIN_3 | GPIO_PIN_2 | GPIO_PIN_1)
+#define OUTPUTH_PINS ( GPIO_PIN_4 | GPIO_PIN_3 | GPIO_PIN_2 | GPIO_PIN_1)
 
 #define CLK16_TRIG_PORT SYSCTL_PERIPH_GPIOF
 #define CLK16_TRIG_BASE GPIO_PORTF_BASE
@@ -69,31 +71,24 @@ ExternalClockIntHandler(void)
     //if(g_bOutputMux)
 
     GPIOIntClear(CLK16_TRIG_BASE, CLK16_TRIG_PIN);
-    if(GPIOPinRead(CLK16_TRIG_BASE, CLK16_TRIG_PIN)){ // Low
-        GPIOPinWrite(OUTPUTL_BASE,OUTPUTL_PINS,g_ui8ParallelOutLow[g_i]);
-        //GPIOPinWrite(CLK16_TRIG_PORT, GPIO_PIN_2|GPIO_PIN_3, 0b10);
+    if(GPIOPinRead(CLK16_TRIG_BASE, CLK16_TRIG_PIN))
+    { // Low
+        GPIOPinWrite(OUTPUTL_BASE,OUTPUTL_PINS,g_ui8ParallelOutLow << 4);
     }
     else
-    {
-        GPIOPinWrite(OUTPUTH_BASE,OUTPUTH_PINS,g_ui8ParallelOutHigh[g_i]);
+    { // High
+        GPIOPinWrite(OUTPUTH_BASE,OUTPUTH_PINS,g_ui8ParallelOutHigh << 1);
         g_bIntDone = 1;
         g_bParallelDataReady = 0;
         g_ui32SymbolsTx ++;
-
-        g_i = (g_i+1)%3;
-        //GPIOPinWrite(CLK16_TRIG_PORT, GPIO_PIN_2|GPIO_PIN_3, 0b01);
-    }
-
-    //g_bHighLowSwitch = !g_bHighLowSwitch;
-    //else
-        //GPIOPinWrite(OUTPUTH_BASE,OUTPUTH_PINS,outData);
-
-    //ROM_TimerIntClear(TIMER0_BASE, TIMER_TIMB_TIMEOUT);
+     }
 }
 
 void
 InitPWMClock(void)
 {
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
+
     // Init PWM to output clock
     SysCtlPWMClockSet(SYSCTL_PWMDIV_1);
     SysCtlPeripheralEnable(SYSCTL_PERIPH_PWM0);
@@ -101,9 +96,9 @@ InitPWMClock(void)
     GPIOPinConfigure(GPIO_PB6_M0PWM0);
     PWMGenConfigure(PWM0_BASE, PWM_GEN_0, PWM_GEN_MODE_DOWN | PWM_GEN_MODE_NO_SYNC);
 
-    // Set frequency to 50kHz
-    PWMGenPeriodSet(PWM0_BASE, PWM_GEN_0, 1000);
-    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_0, 500);
+    // Set frequency to 100kHz
+    PWMGenPeriodSet(PWM0_BASE, PWM_GEN_0, 500);
+    PWMPulseWidthSet(PWM0_BASE, PWM_OUT_0, 250);
 
     PWMOutputState(PWM0_BASE, PWM_OUT_0_BIT, true);
 }
@@ -333,8 +328,8 @@ void
 LifiTxByte(uint8_t byte){
     while(!g_bIntDone);
     g_bIntDone = 0;
-    g_ui8ParallelOutLow[g_i] = byte%16;
-    g_ui8ParallelOutHigh[g_i] = byte/16;
+    g_ui8ParallelOutLow = byte%16;
+    g_ui8ParallelOutHigh = byte/16;
 }
 
 int
@@ -354,6 +349,8 @@ main(void)
 
     // Init PWM output clock
     InitPWMClock();
+
+    SysCtlDelay(SysCtlClockGet()/3);
 
     // Open UART0 and show the application name on the UART.
     ConfigureUART();
@@ -389,14 +386,22 @@ main(void)
 
 
     // Start clock and data output
-    PWMGenEnable(PWM0_BASE, PWM_GEN_0);
 
     ui32BufferPos = 0;
+    //LifiTxByte(0xCB); // Arbit data
+
+    PWMGenEnable(PWM0_BASE, PWM_GEN_0);
+
+    LifiTxByte(0x00); // Clock bits
 
     while(1)
     {
         if(g_bRxAvailable){
-            LifiTxByte(0b01110001); // Phase alignment bytes
+
+            LifiTxByte(0x00); // Clock bits
+            SysCtlDelay(SysCtlClockGet()/100);
+
+            LifiTxByte(0xCB); // Phase alignment bytes
             //LifiTxByte(0b11001001); // Phase alignment bytes
 
             while(g_ui32NumBytes){
@@ -406,6 +411,11 @@ main(void)
             }
 
             g_bRxAvailable = 0;
+
+            //LifiTxByte(0x00); // Clock bits
+            //SysCtlDelay(SysCtlClockGet()/100);
+
+            //PWMGenDisable(PWM0_BASE, PWM_GEN_0);
         }
     }
 }

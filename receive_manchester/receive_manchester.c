@@ -59,24 +59,30 @@ volatile uint32_t g_ui32NumBytes = 0;
 
 volatile uint32_t g_ui32TxCount = 0;
 volatile uint32_t g_ui32RxCount = 0;
+
+volatile uint8_t inpGraph[100];
+volatile uint8_t g_i=0;
+
 #ifdef DEBUG
 uint32_t g_ui32UARTRxErrors = 0;
 #endif
 
 
-#define INPUT_PORT SYSCTL_PERIPH_GPIOB
-#define INPUT_BASE GPIO_PORTB_BASE
-#define INPUT_PIN GPIO_PIN_6
-#define INPUT_INT INT_GPIOB
+#define INPUTL_PORT SYSCTL_PERIPH_GPIOC
+#define INPUTL_BASE GPIO_PORTC_BASE
+#define INPUTL_PINS (GPIO_PIN_7 | GPIO_PIN_6 | GPIO_PIN_5 | GPIO_PIN_4)
 
-#define CLKIN_PORT SYSCTL_PERIPH_GPIOF
-#define CLKIN_BASE GPIO_PORTF_BASE
-#define CLKIN_PIN GPIO_PIN_4
-#define CLKIN_INT INT_GPIOF
+#define INPUTH_PORT SYSCTL_PERIPH_GPIOE
+#define INPUTH_BASE GPIO_PORTE_BASE
+#define INPUTH_PINS (GPIO_PIN_4 | GPIO_PIN_3 | GPIO_PIN_2 | GPIO_PIN_1)
 
-volatile uint16_t g_ui16InputWord = 0;
+#define CLKIN_PORT SYSCTL_PERIPH_GPIOB
+#define CLKIN_BASE GPIO_PORTB_BASE
+#define CLKIN_PIN GPIO_PIN_6
+
+#define ALIGN_WORD 0xCB
+
 volatile bool g_bInputFrameAligned = 0;
-volatile uint8_t g_ui8InputCount = 0;
 
 volatile uint8_t g_ui8LifiByte = 0;
 volatile bool g_bLifiByteRx = 0;
@@ -140,7 +146,7 @@ __error__(char *pcFilename, uint32_t ui32Line)
 #endif
 
 
-void
+/*void
 ClkInputIntHandler(void)
 {
     int currVal = GPIOPinRead(INPUT_BASE, INPUT_PIN) & INPUT_PIN;
@@ -177,7 +183,30 @@ ClkInputIntHandler(void)
 
         g_ui8InputCount = 0;
     }
+}*/
+
+void ClkInputIntHandler(){
+    ROM_TimerIntClear(TIMER0_BASE, TIMER_CAPA_MATCH);
+
+    int currVal = (GPIOPinRead(INPUTL_BASE, INPUTL_PINS) & INPUTL_PINS) >> 4;
+    currVal += (GPIOPinRead(INPUTH_BASE, INPUTH_PINS) & INPUTH_PINS) << 3;
+
+    inpGraph[g_i] = currVal % 2;
+    g_i = (g_i+1)%100;
+
+    if(!g_bInputFrameAligned){
+        if(currVal == ALIGN_WORD || currVal == ~ALIGN_WORD){
+            g_bInputFrameAligned = 1;
+            ROM_TimerLoadSet(TIMER0_BASE, TIMER_A, 7);
+        }
+    } else {
+        g_ui8LifiByte = currVal;
+        g_bLifiByteRx = 1;
+    }
+
+    ROM_TimerEnable(TIMER0_BASE, TIMER_A);
 }
+
 /*
 void
 InputIntHandler(void)
@@ -439,20 +468,29 @@ main(void)
     ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
     ROM_GPIOPinTypeUSBAnalog(GPIO_PORTD_BASE, GPIO_PIN_4 | GPIO_PIN_5);
 
-    // Enable Edge-Triggered pin
-    ROM_SysCtlPeripheralEnable(INPUT_PORT);
-    ROM_GPIOPinTypeGPIOInput(INPUT_BASE, INPUT_PIN);
+    ROM_SysCtlPeripheralEnable(INPUTL_PORT);
+    ROM_GPIOPinTypeGPIOInput(INPUTL_BASE, INPUTL_PINS);
+    ROM_SysCtlPeripheralEnable(INPUTH_PORT);
+    ROM_GPIOPinTypeGPIOInput(INPUTH_BASE, INPUTH_PINS);
 
     // Enable Edge-Triggered pin
     ROM_SysCtlPeripheralEnable(CLKIN_PORT);
-    ROM_GPIOPinTypeGPIOInput(CLKIN_BASE, CLKIN_PIN);
+    ROM_SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
+    ROM_GPIOPinTypeTimer(CLKIN_BASE, CLKIN_PIN);
+    GPIOPinConfigure(GPIO_PB6_T0CCP0);
 
-    GPIOIntDisable(CLKIN_BASE, CLKIN_PIN);        // Disable interrupt for PF4 (in case it was enabled)
-    GPIOIntClear(CLKIN_BASE, CLKIN_PIN);      // Clear pending interrupts for PF4
-    GPIOIntRegister(CLKIN_BASE, ClkInputIntHandler);     // Register our handler function for port F
-    GPIOIntTypeSet(CLKIN_BASE, CLKIN_PIN, GPIO_FALLING_EDGE);
-    GPIOIntEnable(CLKIN_BASE, CLKIN_PIN);
-    ROM_IntEnable(CLKIN_INT);
+    ROM_TimerConfigure(TIMER0_BASE, (TIMER_CFG_SPLIT_PAIR |
+                       TIMER_CFG_A_CAP_COUNT));
+    ROM_TimerControlEvent(TIMER0_BASE, TIMER_A, TIMER_EVENT_POS_EDGE);
+    ROM_TimerLoadSet(TIMER0_BASE, TIMER_A, 1);
+    ROM_TimerMatchSet(TIMER0_BASE, TIMER_A, 0);
+
+    ROM_IntEnable(INT_TIMER0A);
+    ROM_TimerIntEnable(TIMER0_BASE, TIMER_CAPA_MATCH);
+
+    ROM_TimerEnable(TIMER0_BASE, TIMER_A);
+
+
 
 /*
     // Enable timer B0
